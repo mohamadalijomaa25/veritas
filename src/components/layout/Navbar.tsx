@@ -1,6 +1,8 @@
+import { useState, useEffect } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 
 const LINKS = [
   { to: "/", label: "Home" },
@@ -12,8 +14,34 @@ const LINKS = [
 
 export function Navbar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const [isVisible, setIsVisible] = useState(true);
+
+  useEffect(() => {
+    let lastScroll = window.scrollY;
+
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+
+      // Hide navbar if scrolling down past 80px, show if scrolling up
+      if (currentScrollY > lastScroll && currentScrollY > 80) {
+        setIsVisible(false);
+      } else {
+        setIsVisible(true);
+      }
+
+      lastScroll = currentScrollY;
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   return (
-    <header className="fixed top-0 left-0 right-0 z-40">
+    <motion.header
+      className="fixed top-0 left-0 right-0 z-40"
+      animate={{ y: isVisible ? 0 : -100 }}
+      transition={{ duration: 0.3, ease: "easeInOut" }}
+    >
       <div className="mx-auto mt-4 max-w-7xl px-4">
         <div className="glass-strong flex items-center justify-between rounded-2xl px-4 py-2.5">
           <Link to="/" className="flex items-center gap-2.5 group">
@@ -60,6 +88,6 @@ export function Navbar() {
           </Link>
         </div>
       </div>
-    </header>
+    </motion.header>
   );
 }
