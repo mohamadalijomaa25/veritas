@@ -89,21 +89,6 @@ function DetectPage() {
   const [lastSampleIdx, setLastSampleIdx] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("veritas_last_analysis");
-      if (stored) {
-        const parsed = JSON.parse(stored) as FullAnalysis;
-        if (parsed && parsed.text) {
-          setText(parsed.text);
-          setResult(parsed);
-        }
-      }
-    } catch (err) {
-      console.warn("Failed to load last analysis from localStorage:", err);
-    }
-  }, []);
-
   const onFile = async (f: File) => {
     if (!f) return;
     if (f.size > 2 * 1024 * 1024) {
