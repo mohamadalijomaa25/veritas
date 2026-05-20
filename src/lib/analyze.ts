@@ -92,24 +92,28 @@ async function callGemini(text: string): Promise<TransformerResult> {
   if (!apiKey) throw new Error("VITE_GEMINI_API_KEY is not set in .env");
 
   const started = performance.now();
-  const MAX_RETRIES = 3;
-  const RETRY_DELAYS = [5000, 15000, 30000]; // 5s, 15s, 30s
+  const MAX_RETRIES = 5;
+  const RETRY_DELAYS = [3000, 8000, 15000, 25000, 40000]; // 3s, 8s, 15s, 25s, 40s
 
   let lastError = "";
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { status, body } = await callGeminiOnce(text, apiKey);
 
-    if (status === 429) {
+    // 429 = rate limited, 503 = high demand / temporarily unavailable
+    if (status === 429 || status === 503) {
       if (attempt < MAX_RETRIES - 1) {
         const waitSec = RETRY_DELAYS[attempt] / 1000;
+        const reason = status === 503 ? "Service temporarily unavailable (high demand)" : "Rate limited";
         console.warn(
-          `[Gemini] Rate limited. Retrying in ${waitSec}s... (attempt ${attempt + 1}/${MAX_RETRIES})`,
+          `[Gemini] ${reason}. Retrying in ${waitSec}s... (attempt ${attempt + 1}/${MAX_RETRIES})`,
         );
         await sleep(RETRY_DELAYS[attempt]);
         continue;
       }
       lastError =
-        "Rate limit reached. The free Gemini API allows ~15 requests/minute. Please wait a moment and try again.";
+        status === 503
+          ? "Gemini API is currently experiencing high demand. Please try again in a moment."
+          : "Rate limit reached. The free Gemini API allows ~15 requests/minute. Please wait a moment and try again.";
       break;
     }
 
@@ -182,38 +186,58 @@ export async function neutralizeArticle(text: string): Promise<string> {
   if (!apiKey) throw new Error("VITE_GEMINI_API_KEY is not set in .env");
 
   const trimmed = text.slice(0, 8000);
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [
-            {
-              text: "You are a professional journalistic copyeditor. Rewrite the user's article to be completely neutral, objective, dry, matter-of-fact, and encyclopedic in tone. Remove all emotional sensationalism, exclamation points, hyperbolic verbs (e.g. 'blasts', 'annihilates', 'destroys'), conspiracy-style speculation, loaded adjectives, and clickbait phrases. Keep the core factual claims or arguments intact, but present them with academic neutrality, as if writing an unbiased Wikipedia entry. Return ONLY the rewritten text without any greetings, commentary, markdown headers, or chat filler.",
-            },
-          ],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: `Neutralize the tone of this article:\n\n"""${trimmed}"""` }],
-          },
-        ],
-      }),
-    },
-  );
+  const MAX_RETRIES = 5;
+  const RETRY_DELAYS = [3000, 8000, 15000, 25000, 40000];
 
-  if (!resp.ok) {
-    const errorText = await resp.text();
-    throw new Error(`Gemini tone neutralization failed: ${errorText}`);
+  const body = JSON.stringify({
+    system_instruction: {
+      parts: [
+        {
+          text: "You are a professional journalistic copyeditor. Rewrite the user's article to be completely neutral, objective, dry, matter-of-fact, and encyclopedic in tone. Remove all emotional sensationalism, exclamation points, hyperbolic verbs (e.g. 'blasts', 'annihilates', 'destroys'), conspiracy-style speculation, loaded adjectives, and clickbait phrases. Keep the core factual claims or arguments intact, but present them with academic neutrality, as if writing an unbiased Wikipedia entry. Return ONLY the rewritten text without any greetings, commentary, markdown headers, or chat filler.",
+        },
+      ],
+    },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `Neutralize the tone of this article:\n\n"""${trimmed}"""` }],
+      },
+    ],
+  });
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body },
+    );
+
+    // Retry on 429 (rate limit) and 503 (high demand)
+    if (resp.status === 429 || resp.status === 503) {
+      if (attempt < MAX_RETRIES - 1) {
+        const waitSec = RETRY_DELAYS[attempt] / 1000;
+        const reason = resp.status === 503 ? "Service temporarily unavailable (high demand)" : "Rate limited";
+        console.warn(`[Gemini neutralize] ${reason}. Retrying in ${waitSec}s... (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await sleep(RETRY_DELAYS[attempt]);
+        continue;
+      }
+      const msg = resp.status === 503
+        ? "Gemini API is currently experiencing high demand. Please try again in a moment."
+        : "Rate limit reached. Please wait a moment and try again.";
+      throw new Error(msg);
+    }
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      throw new Error(`Gemini tone neutralization failed: ${errorText}`);
+    }
+
+    const json = await resp.json();
+    const rewritten = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rewritten) throw new Error("Failed to get rewritten text from Gemini.");
+    return rewritten.trim();
   }
 
-  const json = await resp.json();
-  const rewritten = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rewritten) throw new Error("Failed to get rewritten text from Gemini.");
-  return rewritten.trim();
+  throw new Error("Gemini neutralization failed after retries.");
 }
 
 export async function analyzeArticle(text: string): Promise<FullAnalysis> {
